@@ -4,7 +4,7 @@ NAME="[ LineBot DAEMON ]"
 PID="./linebot.pid"
 CMD="ruby linebot.rb"
 
-#test
+#test_001
 
 start()
 {
