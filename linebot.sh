@@ -4,6 +4,8 @@ NAME="[ LineBot DAEMON ]"
 PID="./linebot.pid"
 CMD="ruby linebot.rb"
 
+#test
+
 start()
 {
   if [ -e $PID ]; then
