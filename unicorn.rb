@@ -1,4 +1,5 @@
 # coding: utf-8
+# add test line
 
 @dir = "/home/ec2-user/linebot/"
 
