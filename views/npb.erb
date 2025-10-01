@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NPB選手年齢分布ダッシュボード</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js" integrity="sha256-uccnmbTk4OyYwYOE6nJx3sI5OGucs5cjox96D65gisY=" crossorigin="anonymous"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Helvetica Neue", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", sans-serif;
+        background-color: #f8fafc;
+        color: #0f172a;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 24px 16px 48px;
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 1.8rem;
+      }
+
+      header p {
+        margin: 0.25rem 0 0;
+        color: #475569;
+      }
+
+      section {
+        margin-top: 24px;
+        background-color: #ffffffdd;
+        border-radius: 12px;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.05);
+        padding: 20px;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+
+      label {
+        font-weight: 600;
+      }
+
+      select {
+        padding: 6px 10px;
+        font-size: 1rem;
+        border-radius: 8px;
+        border: 1px solid #cbd5f5;
+        background-color: #fff;
+      }
+
+      canvas {
+        width: 100%;
+        max-height: 420px;
+      }
+
+      .meta {
+        margin-top: 12px;
+        font-size: 0.9rem;
+        color: #475569;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 16px;
+        font-size: 0.95rem;
+      }
+
+      th,
+      td {
+        padding: 10px 8px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+      }
+
+      th {
+        font-weight: 700;
+        background-color: #f1f5f9;
+      }
+
+      tbody tr:hover {
+        background-color: #f8fafc;
+      }
+
+      .status {
+        font-weight: 600;
+        color: #dc2626;
+      }
+
+      @media (max-width: 640px) {
+        header h1 {
+          font-size: 1.4rem;
+        }
+
+        table {
+          font-size: 0.85rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>NPB選手年齢分布ダッシュボード</h1>
+        <p>NPB公式サイトの登録選手一覧から年齢・ポジション・利き手情報を集計しています。</p>
+      </header>
+
+      <section class="controls">
+        <label for="team-select">球団を選択:</label>
+        <select id="team-select" aria-label="球団選択"></select>
+        <span id="data-status" class="status" aria-live="polite"></span>
+      </section>
+
+      <section>
+        <h2 style="margin-top: 0; font-size: 1.3rem;">年齢分布</h2>
+        <canvas id="age-chart" role="img" aria-label="年齢分布グラフ"></canvas>
+        <div class="meta" id="meta-summary"></div>
+      </section>
+
+      <section>
+        <h2 style="margin-top: 0; font-size: 1.3rem;">選手一覧</h2>
+        <div class="meta" id="fetched-at"></div>
+        <div class="meta" id="stale-warning"></div>
+        <div class="meta" id="fetch-error"></div>
+        <div class="table-wrapper">
+          <table aria-label="選手詳細一覧">
+            <thead>
+              <tr>
+                <th scope="col">背番号</th>
+                <th scope="col">選手名</th>
+                <th scope="col">ポジション</th>
+                <th scope="col">年齢</th>
+                <th scope="col">利き手</th>
+                <th scope="col">投/打 (原文)</th>
+              </tr>
+            </thead>
+            <tbody id="player-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const CATEGORY_META = {
+        pitcher_right: { label: '投手 (右投)', color: '#2563eb', stack: 'pitcher' },
+        pitcher_left: { label: '投手 (左投)', color: '#7c3aed', stack: 'pitcher' },
+        pitcher_switch: { label: '投手 (両投)', color: '#0891b2', stack: 'pitcher' },
+        pitcher_unknown: { label: '投手 (不明)', color: '#334155', stack: 'pitcher' },
+        batter_right: { label: '野手 (右打)', color: '#f97316', stack: 'batter' },
+        batter_left: { label: '野手 (左打)', color: '#dc2626', stack: 'batter' },
+        batter_switch: { label: '野手 (両打)', color: '#059669', stack: 'batter' },
+        batter_unknown: { label: '野手 (不明)', color: '#6b7280', stack: 'batter' }
+      };
+
+      const teamSelect = document.getElementById('team-select');
+      const playerRows = document.getElementById('player-rows');
+      const metaSummary = document.getElementById('meta-summary');
+      const fetchedAtLabel = document.getElementById('fetched-at');
+      const staleWarning = document.getElementById('stale-warning');
+      const fetchErrorLabel = document.getElementById('fetch-error');
+      const statusLabel = document.getElementById('data-status');
+
+      let rosterPayload = null;
+      let ageChart = null;
+
+      function isPitcher(player) {
+        return player.position && player.position.includes('投');
+      }
+
+      function categoryKeyFor(player) {
+        if (isPitcher(player)) {
+          if (player.throws === '右') return 'pitcher_right';
+          if (player.throws === '左') return 'pitcher_left';
+          if (player.throws === '両') return 'pitcher_switch';
+          return 'pitcher_unknown';
+        }
+        if (player.bats === '右') return 'batter_right';
+        if (player.bats === '左') return 'batter_left';
+        if (player.bats === '両') return 'batter_switch';
+        return 'batter_unknown';
+      }
+
+      function buildAgeLabels(players) {
+        const ages = players
+          .map((player) => player.age)
+          .filter((age) => Number.isFinite(age))
+          .sort((a, b) => a - b);
+        if (!ages.length) return [];
+        const labels = [];
+        for (let age = ages[0]; age <= ages[ages.length - 1]; age += 1) {
+          labels.push(age);
+        }
+        return labels;
+      }
+
+      function buildDatasets(players, labels) {
+        const counts = {};
+        Object.keys(CATEGORY_META).forEach((key) => {
+          counts[key] = {};
+        });
+
+        players.forEach((player) => {
+          if (!Number.isFinite(player.age)) return;
+          const key = categoryKeyFor(player);
+          counts[key][player.age] = (counts[key][player.age] || 0) + 1;
+        });
+
+        return Object.entries(CATEGORY_META)
+          .map(([key, meta]) => {
+            const data = labels.map((age) => counts[key][age] || 0);
+            const total = data.reduce((sum, value) => sum + value, 0);
+            if (!total) return null;
+            return {
+              label: meta.label,
+              data,
+              backgroundColor: meta.color,
+              stack: meta.stack
+            };
+          })
+          .filter(Boolean);
+      }
+
+      function updateChart(team) {
+        const labels = buildAgeLabels(team.players);
+        const datasets = buildDatasets(team.players, labels);
+
+        if (!ageChart) {
+          const ctx = document.getElementById('age-chart').getContext('2d');
+          ageChart = new Chart(ctx, {
+            type: 'bar',
+            data: { labels, datasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                tooltip: {
+                  callbacks: {
+                    title(items) {
+                      if (!items.length) return '';
+                      return `${items[0].label} 歳`;
+                    },
+                    label(context) {
+                      const value = context.parsed.y || 0;
+                      return `${context.dataset.label}: ${value}人`;
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  stacked: true,
+                  title: {
+                    display: true,
+                    text: '年齢'
+                  }
+                },
+                y: {
+                  stacked: true,
+                  beginAtZero: true,
+                  title: {
+                    display: true,
+                    text: '人数'
+                  },
+                  ticks: {
+                    precision: 0
+                  }
+                }
+              }
+            }
+          });
+        } else {
+          ageChart.data.labels = labels;
+          ageChart.data.datasets = datasets;
+          ageChart.update();
+        }
+      }
+
+      function renderTable(team) {
+        playerRows.innerHTML = '';
+        const sorted = [...team.players].sort((a, b) => {
+          if (a.age !== b.age) return a.age - b.age;
+          const nameA = a.name || '';
+          const nameB = b.name || '';
+          return nameA.localeCompare(nameB, 'ja');
+        });
+
+        sorted.forEach((player) => {
+          const row = document.createElement('tr');
+          const pitcher = isPitcher(player);
+          const handed = (() => {
+            if (pitcher) {
+              return player.throws ? `${player.throws}投` : '不明';
+            }
+            if (player.bats) return `${player.bats}打`;
+            return player.throws ? `${player.throws}投` : '不明';
+          })();
+
+          const cells = [
+            player.number || '-',
+            player.name || '-',
+            player.position || '-',
+            Number.isFinite(player.age) ? `${player.age}` : '-',
+            handed,
+            player.handedness || '-'
+          ];
+
+          cells.forEach((value) => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            row.appendChild(cell);
+          });
+
+          playerRows.appendChild(row);
+        });
+      }
+
+      function updateSummary(team) {
+        const pitcherCount = team.players.filter((player) => isPitcher(player)).length;
+        const batterCount = team.players.length - pitcherCount;
+        const averageAge = (() => {
+          const ages = team.players.map((player) => player.age).filter((age) => Number.isFinite(age));
+          if (!ages.length) return null;
+          const sum = ages.reduce((total, age) => total + age, 0);
+          return Math.round((sum / ages.length) * 10) / 10;
+        })();
+
+        const parts = [
+          `合計 ${team.players.length} 人`,
+          `投手 ${pitcherCount} 人`,
+          `野手 ${batterCount} 人`
+        ];
+        if (averageAge) parts.push(`平均年齢 ${averageAge} 歳`);
+        metaSummary.textContent = parts.join(' / ');
+      }
+
+      function applyTeam(team) {
+        if (!team) return;
+        updateChart(team);
+        renderTable(team);
+        updateSummary(team);
+      }
+
+      function populateTeamOptions(payload) {
+        teamSelect.innerHTML = '';
+        payload.teams.forEach((team, index) => {
+          const option = document.createElement('option');
+          option.value = String(index);
+          option.textContent = team.name;
+          teamSelect.appendChild(option);
+        });
+      }
+
+      function updateMetadata(payload) {
+        if (payload.fetched_at) {
+          const date = new Date(payload.fetched_at);
+          if (!Number.isNaN(date.valueOf())) {
+            fetchedAtLabel.textContent = `取得時刻: ${date.toLocaleString('ja-JP')}`;
+          }
+        }
+        if (payload.stale) {
+          staleWarning.textContent = '最新の取得に失敗したため、キャッシュされたデータを表示しています。';
+        }
+        if (payload.error) {
+          fetchErrorLabel.textContent = `エラー: ${payload.error}`;
+        }
+      }
+
+      async function initialize() {
+        statusLabel.textContent = 'データ取得中...';
+        try {
+          const response = await fetch('/npb/data');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          rosterPayload = await response.json();
+          if (!rosterPayload.teams || !rosterPayload.teams.length) {
+            throw new Error('球団データが見つかりませんでした');
+          }
+          populateTeamOptions(rosterPayload);
+          updateMetadata(rosterPayload);
+          teamSelect.addEventListener('change', (event) => {
+            const team = rosterPayload.teams[Number(event.target.value)];
+            applyTeam(team);
+          });
+          applyTeam(rosterPayload.teams[0]);
+          statusLabel.textContent = '';
+        } catch (error) {
+          statusLabel.textContent = 'データの取得に失敗しました。';
+          fetchErrorLabel.textContent = `${error.message || error}`;
+        }
+      }
+
+      initialize();
+    </script>
+  </body>
+</html>

@@ -8,18 +8,40 @@ require 'sinatra/reloader'
 require 'active_record'
 require 'mysql2'
 require 'twitter'
+require 'yaml'
 
+require_relative 'lib/npb/roster_fetcher'
 
 ActiveRecord::Base.configurations = YAML.load_file('db/database.yml')
 ActiveRecord::Base.establish_connection(:development)
 
 class LineBotApp < Sinatra::Base
+  configure do
+    set :views, File.expand_path('views', __dir__)
+  end
+
   class TwitterFollow < ActiveRecord::Base
   end
 
   get '/' do
-    "test"
+    redirect '/npb'
   end
+
+  get '/npb' do
+    erb :npb
+  end
+
+  get '/npb/data' do
+    content_type :json, charset: 'utf-8'
+    begin
+      payload = Npb::RosterFetcher.fetch
+      JSON.pretty_generate(payload)
+    rescue Npb::RosterFetcher::FetchError => e
+      status 502
+      JSON.pretty_generate({ error: e.message })
+    end
+  end
+
   post '/callback' do
 
     CONSUMER_KEY         = "vk6EQeteBFrsmEn9TyoEzCgOR"

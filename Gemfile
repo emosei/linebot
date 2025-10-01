@@ -11,9 +11,10 @@ gem 'activerecord'
 gem 'unicorn'
 gem 'httpclient'
 gem 'json'
-gem 'sinatra-contrib' 
+gem 'sinatra-contrib'
 gem 'tweetstream'
 gem 'parallel'
+gem 'nokogiri', '~> 1.6', '>= 1.6.8'
 
 gem 'line-bot-api'
 
